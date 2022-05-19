@@ -1,0 +1,12 @@
+{
+  "name": "replcraft",
+  "author": "eelfloat",
+  "version": "1.3.0",
+  "description": "Replcraft node library",
+  "license": "MIT",
+  "private": true,
+  "main": "replcraft.js",
+  "dependencies": {
+    "ws": "^8.5.0"
+  }
+}
