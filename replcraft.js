@@ -129,7 +129,6 @@ class Client extends EventEmitter {
 
     this.ws.on('message', json => {
       let msg = JSON.parse(json);
-      console.log("debug>", msg);
       if (this.handlers.has(msg.nonce)) {
         this.handlers.get(msg.nonce)(msg);
         this.handlers.delete(msg.nonce);
