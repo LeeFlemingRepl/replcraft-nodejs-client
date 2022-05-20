@@ -24,6 +24,7 @@ const EventEmitter = require('events');
  * @prop {String} Entity.name
  * @prop {number?} Entity.health
  * @prop {number?} Entity.max_health
+ * @prop {String?} Entity.player_uuid
  * @prop {number} Entity.x
  * @prop {number} Entity.y
  * @prop {number} Entity.z
@@ -65,6 +66,22 @@ const EventEmitter = require('events');
  */
 
 /**
+ * @event transact
+ * @param {Object} transaction
+ * @prop {String} transaction.query the text used in the /transact command, excluding the initial amount
+ * @prop {number} transaction.amount The amount of money being offered in the transaction
+ * @prop {String} transaction.player the username of the player using the /transact command
+ * @prop {String} transaction.player_uuid the uuid of the player using the /transact command
+ * @prop {TransactionControl} transaction.accept Accepts the transaction, depositing the money into your account
+ * @prop {TransactionControl} transaction.deny Denies the transaction, refunding the money
+ */
+
+/**
+ * @callback TransactionControl
+ * @returns {Promise}
+ */
+
+/**
  * @event outOfFuel
  * @param {CraftError} the out of fuel error
  */
@@ -72,6 +89,7 @@ const EventEmitter = require('events');
 /**
  * A client for interacting with the ReplCraft server
  * @fires outOfFuel when a request encounters an out-of-fuel error
+ * @fires transact when a player uses the /transact command inside the structure
  */
 class Client extends EventEmitter {
   constructor() {
