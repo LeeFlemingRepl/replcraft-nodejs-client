@@ -45,6 +45,40 @@ const EventEmitter = require('events');
  * @prop {number} ItemReference.z the z coordinate of the container this item is in
  */
 
+/**
+ * @typedef {Object} FuelInfo
+ * @prop {FuelInfoConnection[]} connections A list of all active connections for your player to all your structures.
+ * @prop {FuelInfoStrategy[]} strategies A list of strategies and how much fuel they have in reserve.
+ * @prop {Object.<string, FuelInfoAPICost>} apis A list of apis you can call and their base and adjusted fuel costs
+ */
+
+/**
+ * @typedef {Object} FuelInfoConnection
+ * @prop {number} x the minimum x coordinate of the connection's structure
+ * @prop {number} y the minimum y coordinate of the connection's structure
+ * @prop {number} z the minimum z coordinate of the connection's structure
+ * @prop {string} structure A textual representation of the structure. The format is not fixed and subject to change.
+ * @prop {Object.<string, FuelInfoConnectionFuelUsage>} fuelUsage Fuel used by API route
+ */
+
+/**
+ * @typedef {Object} FuelInfoConnectionFuelUsage
+ * @prop {number} second the amount of fuel used in the past 1 second
+ * @prop {number} minute the amount of fuel used in the past 1 minute
+ */
+
+/**
+ * @typedef {Object} FuelInfoStrategy
+ * @prop {string} strategy the name of the strategy
+ * @prop {number} spareFuel How much "spare" fuel this strategy has, which will be used before the strategy is activated to generate more. For `ratelimit`, this is always increasing up to a cap. For `item`, this is refilled when an item is burnt.
+ */
+
+/**
+ * @typedef {Object} FuelInfoAPICost
+ * @prop {number} baseFuelCost How much this API costs normally
+ * @prop {number} fuelCost How much this API costs right now
+ */
+
 /** @typedef {number[]} XYZ A tuple of x, y, z coordinates */
 /** @event open */
 /** @event close */
@@ -472,6 +506,15 @@ class Client extends EventEmitter {
    */
   craft(x, y, z, ingredients) {
     return this.request({ action: 'craft', x, y, z, ingredients }).then(() => {});
+  }
+
+  /**
+   * Obtains detailed fuel usage info for all connections
+   * @return {Promise<FuelInfo>}
+   * @throws {CraftError}
+   */
+  fuelInfo() {
+    return this.request({ action: 'fuelinfo' });
   }
 
   /**
