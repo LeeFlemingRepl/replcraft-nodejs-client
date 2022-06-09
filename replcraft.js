@@ -228,14 +228,11 @@ class Client extends EventEmitter {
 
   /** 
    * Retrieves the inner size of the structure
-   * @param {number} x the inner size of the structure in the x coordinate
-   * @param {number} y the inner size of the structure in the y coordinate
-   * @param {number} z the inner size of the structure in the z coordinate
    * @return {Promise<XYZA>}
    * @throws {CraftError}
    */
-  getSize(x, y, z) {
-    return this.request({ action: 'get_size', x, y, z }).then(r => [r.x, r.y, r.z]);
+  getSize() {
+    return this.request({ action: 'get_size' }).then(r => [r.x, r.y, r.z]);
   }
 
   /** 
