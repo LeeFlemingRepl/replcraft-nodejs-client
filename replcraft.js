@@ -14,8 +14,8 @@ const EventEmitter = require('events');
 /**
  * @typedef {Error} CraftError
  * @prop {String} CraftError.type
- *   one of "connection closed", "unauthenticated", "invalid operation",
- *   "bad request", "out of fuel" or "offline".
+ *   one of "connection closed", "unauthenticated", "authentication failed", "invalid operation",
+ *   "invalid structure", "bad request", "out of fuel" or "offline".
  */
 
 /**
@@ -97,6 +97,8 @@ const EventEmitter = require('events');
  * @param {number} x the x coordinate of the block that changed
  * @param {number} y the y coordinate of the block that changed
  * @param {number} z the z coordinate of the block that changed
+ * @param {number} context the context ID this event was fired in.
+ *   Will be re-fired on the appropriate StructureContext as well.
  */
 
 /**
@@ -108,6 +110,8 @@ const EventEmitter = require('events');
  * @prop {String} transaction.player_uuid the uuid of the player using the /transact command
  * @prop {TransactionControl} transaction.accept Accepts the transaction, depositing the money into your account
  * @prop {TransactionControl} transaction.deny Denies the transaction, refunding the money
+ * @prop {number} transaction.context the context ID this event was fired in.
+ *   Will be re-fired on the appropriate StructureContext as well.
  */
 
 /**
@@ -117,18 +121,33 @@ const EventEmitter = require('events');
 
 /**
  * @event outOfFuel
- * @param {CraftError} the out of fuel error
+ * @param {CraftError} error the out of fuel error
+ */
+
+/**
+ * @event contextOpened
+ * @param {StructureContext} context the newly created context
+ * @param {String} cause why the context was created
+ */
+
+/**
+ * @event contextClosed
+ * @param {number} context the ID of the closed context.
+ *   Will be re-fired on the appropriate StructureContext as well.
  */
 
 /**
  * A client for interacting with the ReplCraft server
  * @fires outOfFuel when a request encounters an out-of-fuel error
  * @fires transact when a player uses the /transact command inside the structure
+ * @fires contextOpened when a new structure context is opened
+ * @fires contextOpened when a structure context is closed
  */
 class Client extends EventEmitter {
   constructor() {
     super();
     this.ws = null;
+    this.host = null;
     this.handlers = null;
     this.nonce = 0;
     this.retryFuelErrors = false;
@@ -159,71 +178,208 @@ class Client extends EventEmitter {
    * @fires close
    * @fires error
    */
-  login(token) {
-    if (this.ws) this.ws.close();
+  async login(token) {
+    if (this.ws && this.host != config.host) {
+      let error = new Error("Attempted to log in to different servers over the same websocket. Create a new client instead");
+      error.type = "connection closed";
+      throw error;
+    }
     token = token.replace(/\s*(http:\/\/)?\s*/, "");
     let config = JSON.parse(atob(token.split('.')[1]));
-    this.ws = new WebSocket("ws://" + config.host + "/gateway", {});
-    this.handlers = new Map();
+    if (!this.ws) {
+      this.ws = new WebSocket("ws://" + config.host + "/gateway/v2", {});
+      this.host = config.host;
+      this.handlers = new Map();
+
+      let heartbeat = null;
     
-    this.ws.on('close', () => {
-      this.emit('close');
-      for (let [_nonce, handler] of this.handlers.entries()) {
-        handler({ ok: false, error: "connection closed", message: "connection closed" });
-      }
-      this.handlers = null;
-      this.ws = null;
-    });
+      this.ws.once('close', () => {
+        this.emit('close');
+        for (let [_nonce, handler] of this.handlers.entries()) {
+          handler({ ok: false, error: "connection closed", message: "connection closed" });
+        }
+        this.handlers = null;
+        this.ws = null;
+      });
 
-    this.ws.on('error', err => {
-      this.emit('error', err);
-    });
+      this.ws.on('error', err => {
+        this.emit('error', err);
+      });
 
-    this.ws.on('message', json => {
-      let msg = JSON.parse(json);
-      if (this.handlers.has(msg.nonce)) {
-        this.handlers.get(msg.nonce)(msg);
-        this.handlers.delete(msg.nonce);
-      }
-      switch (msg.type) {
-        case "block update":
-          this.emit("block update", msg.cause, msg.block, msg.x, msg.y, msg.z);
-          break;
+      this.ws.on('message', json => {
+        let msg = JSON.parse(json);
+        if (this.handlers.has(msg.nonce)) {
+          this.handlers.get(msg.nonce)(msg);
+          this.handlers.delete(msg.nonce);
+        }
+        this.emit("__mesage", msg);
+        switch (msg.type) {
+          case "contextOpened":
+            this.emit("contextOpened", new StructureContext(this, msg.id), msg.cause);
+            break;
 
-        case "transact":
-          this.emit("transact", {
-            query: msg.query,
-            amount: msg.amount,
-            player: msg.player,
-            player_uuid: msg.player_uuid,
-            accept: () => {
-              return this.request({
-                action: 'respond',
-                queryNonce: msg.queryNonce,
-                accept: true
-              });
-            },
-            deny: () => {
-              return this.request({
-                action: 'respond',
-                queryNonce: msg.queryNonce,
-                accept: false
-              });
-            }
-          });
-          break;
-      }
-      if (msg.event) {
-        this.emit(msg.event, msg.cause, msg.block, msg.x, msg.y, msg.z);
-      }
-    });
+          case "contextClosed":
+            this.emit("contextClosed", msg.id);
+            break;
 
-    return new Promise((res, rej) => {
-      this.ws.once('open', () => {
-        this.emit('open');
-        this.request({ action: 'authenticate', token }).then(res).catch(rej);
+          case "block update":
+            this.emit("block update", msg.cause, msg.block, msg.x, msg.y, msg.z, msg.context);
+            break;
+
+          case "transact":
+            this.emit("transact", {
+              query: msg.query,
+              amount: msg.amount,
+              player: msg.player,
+              player_uuid: msg.player_uuid,
+              context: msg.context,
+              accept: () => {
+                return this.request({
+                  action: 'respond',
+                  context: msg.context,
+                  queryNonce: msg.queryNonce,
+                  accept: true
+                });
+              },
+              deny: () => {
+                return this.request({
+                  action: 'respond',
+                  context: msg.context,
+                  queryNonce: msg.queryNonce,
+                  accept: false
+                });
+              }
+            });
+            break;
+        }
+      });
+
+      await new Promise((res, rej) => {
+        this.ws.once('open', res);
+        this.ws.once('error', rej);
+      });
+      heartbeat = setInterval(() => this.request({ action: 'heartbeat' }), 10000);
+      this.ws.once('close', () => clearInterval(heartbeat))
+      this.emit('open');
+    }
+
+    let res = await this.request({ action: 'authenticate', token });
+    if (res.context != null) return new StructureContext(this, res.context);
+  }
+
+  /**
+   * Enables or disables automatic retries when out of fuel.
+   * Note that requests will hang indefinitely until fuel is supplied.
+   * You can monitor fuel status by listening to the "outOfFuel" event
+   * @param {boolean} retry if retries should be enabled or disabled
+   */
+  retryOnFuelError(retry=true) {
+    this.retryFuelErrors = retry;
+  }
+
+  /** Disconnects the client */
+  disconnect() {
+    if (this.ws) {
+      this.ws.close();
+    }
+  }
+
+  /**
+   * Makes a request to the server. You probably shouldn't use this directly.
+   * @param {Object} args: the request to make
+   * @param {StructureContext?} context: the context making this request
+   * @return {Promise<Object>}
+   * @throws {CraftError}
+   */
+  async request(args, context) {
+    if (!this.ws) {
+      let error = new Error("connection closed");
+      error.type = "connection closed";
+      throw error;
+    }
+    let nonce = (this.nonce++).toString();
+    let request = { ...args, nonce, context: context?.id ?? undefined };
+    this.emit("__request", request);
+    this.ws.send(JSON.stringify(request));
+
+    return await new Promise((res, rej) => {
+      this.handlers.set(nonce, response => {
+        if (!response.ok) {
+          let error = new Error(response.error + ': ' + response.message);
+          error.type = response.error;
+          if (response.error == 'out of fuel') {
+            this.emit("outOfFuel", error);
+            context?.emit("outOfFuel", error);
+          }
+          if (response.error == 'out of fuel' && this.retryFuelErrors) {
+            setTimeout(() => {
+              this.retryQueue.push({ args, resolve: res, reject: rej });
+              this.emit("__queueFilled");
+            }, 500);
+          } else {
+            rej(error);
+          }
+        } else {
+          res(response);
+        }
       });
     });
+  }
+}
+
+/**
+ * A context scoped to a single structure.
+ *
+ * @fires outOfFuel when a request from this context encounters an out-of-fuel error
+ * @fires transact when a player uses the /transact command inside the structure associated with this context
+ * @fires contextClosed when this context is closed, usually due to expiring or being invalidated.
+ */
+class StructureContext extends EventEmitter {
+  constructor(client, contextId) {
+    super();
+    this.__client = client;
+    this.__disposed = false;
+    this.id = contextId;
+
+    this.onBlockUpdate = (function(cause, block, x, y, z, context) {
+      if (context != contextId) return;
+      this.emit("block update", cause, block, x, y, z, context);
+    }).bind(this);
+
+    this.onTransact = (function(arg) {
+      if (arg.context != contextId) return;
+      this.emit("transact", arg);
+    }).bind(this);
+    this.__client.on("transact", this.onTransact);
+
+    this.onContextClosed = (function(context) {
+      if (context != contextId) return;
+      this.emit("contextClosed", context);
+      this.__dispose();
+    }).bind(this);
+    this.__client.on("contextClosed", this.onTransact);
+  }
+
+  __dispose() {
+    this.__client.off("block update", this.onBlockUpdate);
+    this.__client.off("transact", this.onTransact);
+    this.__client.off("contextClosed", this.onContextClosed);
+    this.__disposed = true;
+  }
+
+  /**
+   * Makes a request to the server and includes this context's ID. You probably shouldn't use this directly.
+   * @param {Object} args: the request to make
+   * @return {Promise<Object>}
+   * @throws {CraftError}
+   */
+  async request(args) {
+    if (this.__disposed) {
+      let error = new Error("This context has expired");
+      error.type = "connection closed";
+      throw error;
+    }
+    return await this.__client.request(args, this);
   }
 
   /** 
@@ -231,7 +387,7 @@ class Client extends EventEmitter {
    * @return {Promise<XYZA>}
    * @throws {CraftError}
    */
-  getSize() {
+   getSize() {
     return this.request({ action: 'get_size' }).then(r => [r.x, r.y, r.z]);
   }
 
@@ -512,62 +668,6 @@ class Client extends EventEmitter {
    */
   fuelInfo() {
     return this.request({ action: 'fuelinfo' });
-  }
-
-  /**
-   * Enables or disables automatic retries when out of fuel.
-   * Note that requests will hang indefinitely until fuel is supplied.
-   * You can monitor fuel status by listening to the "outOfFuel" event
-   * @param {boolean} retry if retries should be enabled or disabled
-   */
-  retryOnFuelError(retry=true) {
-    this.retryFuelErrors = retry;
-  }
-
-  /** Disconnects the client */
-  disconnect() {
-    if (this.ws) {
-      this.ws.close();
-    }
-  }
-
-  /**
-   * Makes a request to the server. You probably shouldn't use this directly.
-   * @param {Object} args: the request to make
-   * @return {Promise<Object>}
-   * @throws {CraftError}
-   */
-  async request(args) {
-    if (!this.ws) {
-      let error = new Error("connection closed");
-      error.type = "connection closed";
-      throw error;
-    }
-    let nonce = (this.nonce++).toString();
-    let request = { ...args, nonce };
-    this.ws.send(JSON.stringify(request));
-
-    return await new Promise((res, rej) => {
-      this.handlers.set(nonce, response => {
-        if (!response.ok) {
-          let error = new Error(response.error + ': ' + response.message);
-          error.type = response.error;
-          if (response.error == 'out of fuel') {
-            this.emit("outOfFuel", error);
-          }
-          if (response.error == 'out of fuel' && this.retryFuelErrors) {
-            setTimeout(() => {
-              this.retryQueue.push({ args, resolve: res, reject: rej });
-              this.emit("__queueFilled");
-            }, 500);
-          } else {
-            rej(error);
-          }
-        } else {
-          res(response);
-        }
-      });
-    });
   }
 }
 
