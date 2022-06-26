@@ -69,8 +69,12 @@ const EventEmitter = require('events');
 
 /**
  * @typedef {Object} FuelInfoStrategy
- * @prop {string} strategy the name of the strategy
+ * @prop {string} name the name of the strategy
+ * @prop {string} strategy the type of strategy ("ratelimit", "item", "economy", "durability", etc.)
  * @prop {number} spareFuel How much "spare" fuel this strategy has, which will be used before the strategy is activated to generate more. For `ratelimit`, this is always increasing up to a cap. For `item`, this is refilled when an item is burnt.
+ * @prop {number} userLimit How much fuel the strategy is allowed to use for this context, as set by `setFuelLimit`
+ * @prop {number} totalUsed How much fuel the strategy has generated for this context so far
+ * @prop {number} generatableEstimate An estimate of how much fuel can be generated
  */
 
 /**
@@ -127,13 +131,15 @@ const EventEmitter = require('events');
 /**
  * @event contextOpened
  * @param {StructureContext} context the newly created context
- * @param {String} cause why the context was created
+ * @param {String} cause why the context was created. One of
+ *   `itemAttack`, `itemBreakBlock`, `itemInteractBlock`, `itemInteractAir`.
  */
 
 /**
  * @event contextClosed
  * @param {number} context the ID of the closed context.
  *   Will be re-fired on the appropriate StructureContext as well.
+ * @param {String} cause why the context was closed
  */
 
 /**
@@ -163,8 +169,8 @@ class Client extends EventEmitter {
     while (true) {
       await new Promise(res => this.once("__queueFilled", res));
       while (this.retryQueue.length > 0) {
-        let { args, resolve, reject } = this.retryQueue.splice(0, 1)[0];
-        this.request(args).then(resolve).catch(reject);
+        let { args, context, resolve, reject } = this.retryQueue.splice(0, 1)[0];
+        this.request(args, context).then(resolve).catch(reject);
       }
     }
   }
@@ -212,14 +218,14 @@ class Client extends EventEmitter {
           this.handlers.get(msg.nonce)(msg);
           this.handlers.delete(msg.nonce);
         }
-        this.emit("__mesage", msg);
+        this.emit("__message", msg);
         switch (msg.type) {
           case "contextOpened":
             this.emit("contextOpened", new StructureContext(this, msg.id), msg.cause);
             break;
 
           case "contextClosed":
-            this.emit("contextClosed", msg.id);
+            this.emit("contextClosed", msg.id, msg.cause);
             break;
 
           case "block update":
@@ -264,7 +270,10 @@ class Client extends EventEmitter {
     }
 
     let res = await this.request({ action: 'authenticate', token });
-    if (res.context != null) return new StructureContext(this, res.context);
+    return {
+      scope: res.scope,
+      context: res.context ? new StructureContext(this, res.context) : null
+    };
   }
 
   /**
@@ -313,7 +322,7 @@ class Client extends EventEmitter {
           }
           if (response.error == 'out of fuel' && this.retryFuelErrors) {
             setTimeout(() => {
-              this.retryQueue.push({ args, resolve: res, reject: rej });
+              this.retryQueue.push({ args, context, resolve: res, reject: rej });
               this.emit("__queueFilled");
             }, 500);
           } else {
@@ -352,9 +361,9 @@ class StructureContext extends EventEmitter {
     }).bind(this);
     this.__client.on("transact", this.onTransact);
 
-    this.onContextClosed = (function(context) {
+    this.onContextClosed = (function(context, cause) {
       if (context != contextId) return;
-      this.emit("contextClosed", context);
+      this.emit("contextClosed", context, cause);
       this.__dispose();
     }).bind(this);
     this.__client.on("contextClosed", this.onTransact);
@@ -402,6 +411,8 @@ class StructureContext extends EventEmitter {
 
   /** 
    * Retrieves a block at the given structure-local coordinates.
+   * Note that if obfuscation is enabled on the server, some blocks may be replaced
+   * with replcraft-native types instead of the expected minecraft types.
    * @param {number} x the x coordinate of the block (container relative)
    * @param {number} y the y coordinate of the block (container relative)
    * @param {number} z the z coordinate of the block (container relative)
@@ -668,6 +679,28 @@ class StructureContext extends EventEmitter {
    */
   fuelInfo() {
     return this.request({ action: 'fuelinfo' });
+  }
+
+  /**
+   * Limits the amount of fuel that will be consumed from a given strategy for this context.
+   * Calling this multiple times will remember the previous amount used, so calling it twice
+   * with the same limit has no further effect. You must raise the limit to allow a strategy
+   * that has reached it to consume more fuel.
+   * @param {String} strategy the name of the strategy to set the limit for
+   * @param {number} limit the maximum fuel that the strategy is allowed to generate
+   * @returns {Promise}
+   * @throws {CraftError}
+   */
+  setFuelLimit(strategy, limit) {
+    return this.request({ action: 'set_fuel_limit', strategy, limit });
+  }
+
+  /**
+   * Closes the current context
+   * @returns {Promise}
+   */
+  close() {
+    return this.request({ action: 'close' });
   }
 }
 
