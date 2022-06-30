@@ -38,11 +38,16 @@ const EventEmitter = require('events');
  */
 
 /**
- * @typedef {Object} ItemReference
+ * @typedef {Object} ContainerReference 
+ * @prop {number?} ContainerReference.x the x coordinate of the container this item is in
+ * @prop {number?} ContainerReference.y the y coordinate of the container this item is in
+ * @prop {number?} ContainerReference.z the z coordinate of the container this item is in
+ * @prop {boolean?} ContainerReference.structure when `true`, use structure inventory instead of a container
+ */
+
+/**
+ * @typedef {ContainerReference} ItemReference
  * @prop {number} ItemReference.index the container slot this item is in
- * @prop {number} ItemReference.x the x coordinate of the container this item is in
- * @prop {number} ItemReference.y the y coordinate of the container this item is in
- * @prop {number} ItemReference.z the z coordinate of the container this item is in
  */
 
 /**
@@ -354,6 +359,7 @@ class StructureContext extends EventEmitter {
       if (context != contextId) return;
       this.emit("block update", cause, block, x, y, z, context);
     }).bind(this);
+    this.__client.on("block update", this.onBlockUpdate);
 
     this.onTransact = (function(arg) {
       if (arg.context != contextId) return;
@@ -366,7 +372,7 @@ class StructureContext extends EventEmitter {
       this.emit("contextClosed", context, cause);
       this.__dispose();
     }).bind(this);
-    this.__client.on("contextClosed", this.onTransact);
+    this.__client.on("contextClosed", this.onContextClosed);
   }
 
   __dispose() {
@@ -432,33 +438,20 @@ class StructureContext extends EventEmitter {
    * @param {number} y the y coordinate of the block (container relative)
    * @param {number} z the z coordinate of the block (container relative)
    * @param {Block} blockData
-   * @param {number?} source_x the x coordinate of the container to take the block from
-   *                           if excluded, uses the structure inventory instead.
-   * @param {number?} source_y the y coordinate of the container to take the block from
-   *                           if excluded, uses the structure inventory instead.
-   * @param {number?} source_z the z coordinate of the container to take the block from
-   *                           if excluded, uses the structure inventory instead.
-   * @param {number?} target_x the x coordinate of the container to put the drops into
-   *                           if excluded, uses the structure inventory instead.
-   * @param {number?} target_y the y coordinate of the container to put the drops into
-   *                           if excluded, uses the structure inventory instead.
-   * @param {number?} target_z the z coordinate of the container to put the drops into
-   *                           if excluded, uses the structure inventory instead.
+   * @param {ContainerReference?} source the container to take the block from. Defaults to structure inventory.
+   * @param {ContainerReference?} target the container to put drops into. Defaults to structure inventory.
    * @return {Promise}
    * @throws {CraftError}
    */
-  setBlock(
-    x, y, z,
-    blockData,
-    source_x=null, source_y=null, source_z=null,
-    target_x=null, target_y=null, target_z=null
-  ) {
+  setBlock(x, y, z, blockData, source, target) {
+    let { x: source_x, y: source_y, z: source_z, structure: source_structure } = source || {};
+    let { x: target_x, y: target_y, z: target_z, structure: target_structure } = target || {};
     return this.request({
       action: 'set_block',
       x, y, z,
       blockData,
-      source_x, source_y, source_z,
-      target_x, target_y, target_z
+      source_x, source_y, source_z, source_structure,
+      target_x, target_y, target_z, target_structure
     }).then(() => {});
   }
 
@@ -591,36 +584,30 @@ class StructureContext extends EventEmitter {
 
   /** 
    * Gets all items from a container such as a chest or hopper
-   * @param {number} x the x coordinate of the block (container relative)
-   * @param {number} y the y coordinate of the block (container relative)
-   * @param {number} z the z coordinate of the block (container relative)
+   * @param {ContainerReference} target the container to target
    * @return {Promise<Item[]>}
    * @throws {CraftError}
    */
-  getInventory(x, y, z) {
-    return this.request({ action: 'get_inventory', x, y, z }).then(r => r.items);
+  getInventory(target) {
+    return this.request({ action: 'get_inventory', ...target }).then(r => r.items);
   }
 
   /** 
    * Moves an item between containers
-   * @param {number} index the item index in the source container
-   * @param {number} source_x the x coordinate of the source container (container relative)
-   * @param {number} source_y the y coordinate of the source container (container relative)
-   * @param {number} source_z the z coordinate of the source container (container relative)
-   * @param {number} target_x the x coordinate of the source container (container relative)
-   * @param {number} target_y the y coordinate of the source container (container relative)
-   * @param {number} target_z the z coordinate of the source container (container relative)
-   * @param {number|null} target_index the target index in the destination container, or any if null
+   * @param {ItemReference} source the item to move
+   * @param {ItemReference|ContainerReference} target where to move the item
    * @param {number|null} amount the amount of items to move, or all if null
    * @return {Promise}
    * @throws {CraftError}
    */
-  moveItem(index, source_x, source_y, source_z, target_x, target_y, target_z, target_index=null, amount=null) {
+  moveItem(source, target, amount=null) {
+    let { x: source_x, y: source_y, z: source_z, structure: source_structure, index } = source;
+    let { x: target_x, y: target_y, z: target_z, structure: target_structure, index: target_index } = target;
     return this.request({
       action: 'move_item',
       amount,
-      index, source_x, source_y, source_z,
-      target_index, target_x, target_y, target_z
+      index, source_x, source_y, source_z, source_structure,
+      target_index, target_x, target_y, target_z, target_structure
     }).then(() => {});
   }
   
@@ -661,15 +648,13 @@ class StructureContext extends EventEmitter {
 
   /**
    * Crafts an item, which is then stored into the given container
-   * @param {number} x the x coordinate of the output container
-   * @param {number} y the y coordinate of the output container
-   * @param {number} z the z coordinate of the output container
+   * @param {ContainerReference} target the output container
    * @param {ItemReference[]} ingredients the ingredients for the recipe
    * @return {Promise}
    * @throws {CraftError}
    */
-  craft(x, y, z, ingredients) {
-    return this.request({ action: 'craft', x, y, z, ingredients }).then(() => {});
+  craft(target, ingredients) {
+    return this.request({ action: 'craft', ...target, ingredients }).then(() => {});
   }
 
   /**
