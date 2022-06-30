@@ -277,7 +277,9 @@ class Client extends EventEmitter {
     let res = await this.request({ action: 'authenticate', token });
     return {
       scope: res.scope,
-      context: res.context ? new StructureContext(this, res.context) : null
+      context: res.context != null
+        ? new StructureContext(this, res.context)
+        : null
     };
   }
 
