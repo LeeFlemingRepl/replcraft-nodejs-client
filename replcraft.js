@@ -414,7 +414,7 @@ class StructureContext extends EventEmitter {
    * @throws {CraftError}
    */
   location() {
-    return this.request({ action: 'get_location', x, y, z }).then(r => [r.x, r.y, r.z]);
+    return this.request({ action: 'get_location' }).then(r => [r.x, r.y, r.z]);
   }
 
   /** 
