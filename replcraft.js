@@ -183,7 +183,7 @@ class Client extends EventEmitter {
   /**
    * Logs the client in and returns a promise that resolves once authenticated.
    * @param {String} token your api token
-   * @return {Promise}
+   * @return {Promise<{ scope: String, context: StructureContext? }>}
    * @throws {CraftError}
    * @fires open
    * @fires close
@@ -302,8 +302,8 @@ class Client extends EventEmitter {
 
   /**
    * Makes a request to the server. You probably shouldn't use this directly.
-   * @param {Object} args: the request to make
-   * @param {StructureContext?} context: the context making this request
+   * @param {Object} args the request to make
+   * @param {StructureContext?} context the context making this request
    * @return {Promise<Object>}
    * @throws {CraftError}
    */
@@ -346,8 +346,8 @@ class Client extends EventEmitter {
 /**
  * A context scoped to a single structure.
  *
- * @fires outOfFuel when a request from this context encounters an out-of-fuel error
- * @fires transact when a player uses the /transact command inside the structure associated with this context
+ * @fires outOfFuel when a request from this context encounters an out-of-fuel error.
+ * @fires transact when a player uses the /transact command inside the structure associated with this context.
  * @fires contextClosed when this context is closed, usually due to expiring or being invalidated.
  */
 class StructureContext extends EventEmitter {
@@ -386,7 +386,7 @@ class StructureContext extends EventEmitter {
 
   /**
    * Makes a request to the server and includes this context's ID. You probably shouldn't use this directly.
-   * @param {Object} args: the request to make
+   * @param {Object} args the request to make
    * @return {Promise<Object>}
    * @throws {CraftError}
    */
