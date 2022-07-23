@@ -314,7 +314,7 @@ class Client extends EventEmitter {
       throw error;
     }
     let nonce = (this.nonce++).toString();
-    let request = { ...args, nonce, context: context?.id ?? undefined };
+    let request = { ...args, nonce, context: args.context ?? context?.id ?? undefined };
     this.emit("__request", request);
     this.ws.send(JSON.stringify(request));
 
